@@ -1,0 +1,24 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc-version = "0.8.30"
+remappings = [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"
+]
+
+# 开启优化器以减少 Gas 消耗
+optimizer = true
+optimizer_runs = 200
+
+# 测试配置
+verbosity = 2
+
+# 格式化配置
+[fmt]
+line_length = 100
+tab_width = 4
+bracket_spacing = true
+
+
+# See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
