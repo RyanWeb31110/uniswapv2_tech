@@ -1,18 +1,6 @@
 # UniswapV2 深入解析系列 03：流动性移除机制与LP代币销毁
 
-## 系列文章导航
-
 本文是 UniswapV2 深入解析系列的第三篇文章，深入讲解流动性移除的工作原理、LP 代币销毁机制，以及不平衡流动性提供的惩罚效应。
-
-## 目录
-
-1. [流动性移除基础概念](#流动性移除基础概念)
-2. [LP代币销毁机制](#lp代币销毁机制)
-3. [burn函数实现详解](#burn函数实现详解)
-4. [不平衡流动性惩罚机制](#不平衡流动性惩罚机制)
-5. [Foundry测试用例分析](#foundry测试用例分析)
-6. [深度测试与惩罚效应](#深度测试与惩罚效应)
-7. [总结与最佳实践](#总结与最佳实践)
 
 ## 流动性移除基础概念
 
@@ -63,42 +51,42 @@ UniswapV2 的流动性管理采用对称设计：
 ```solidity
 /**
  * @notice 销毁 LP 代币，移除流动性
- * @dev 销毁调用者的所有 LP 代币，返还对应比例的底层代币
+ * @dev 将对应比例的两种代币发送给指定地址
+ * @param to 接收代币的地址
  * @return amount0 返还的 token0 数量
  * @return amount1 返还的 token1 数量
  */
-function burn() public returns (uint256 amount0, uint256 amount1) {
-    // 获取当前合约在两种代币中的余额
-    uint256 balance0 = IERC20(token0).balanceOf(address(this));
-    uint256 balance1 = IERC20(token1).balanceOf(address(this));
-    
-    // 获取调用者的 LP 代币余额
-    uint256 liquidity = balanceOf[msg.sender];
+function burn(address to) external returns (uint256 amount0, uint256 amount1) {
+    address _token0 = token0; // 节省 gas
+    address _token1 = token1; // 节省 gas
 
-    // 按比例计算应返还的代币数量
-    // 使用当前余额而非储备金进行计算（重要细节）
-    amount0 = (liquidity * balance0) / totalSupply;
-    amount1 = (liquidity * balance1) / totalSupply;
+    uint256 balance0 = IERC20(_token0).balanceOf(address(this));
+    uint256 balance1 = IERC20(_token1).balanceOf(address(this));
+    uint256 liquidity = balanceOf(address(this));
 
-    // 验证返还数量是否有效
+    uint256 _totalSupply = totalSupply(); // 节省 gas
+
+    // 使用余额确保按比例分配，防止捐赠攻击
+    amount0 = (liquidity * balance0) / _totalSupply;
+    amount1 = (liquidity * balance1) / _totalSupply;
+
     if (amount0 <= 0 || amount1 <= 0) revert InsufficientLiquidityBurned();
 
-    // 销毁用户的 LP 代币
-    _burn(msg.sender, liquidity);
+    // 销毁 LP 代币
+    _burn(address(this), liquidity);
 
-    // 安全转账：将代币返还给用户
-    _safeTransfer(token0, msg.sender, amount0);
-    _safeTransfer(token1, msg.sender, amount1);
+    // 转账代币给用户
+    _safeTransfer(_token0, to, amount0);
+    _safeTransfer(_token1, to, amount1);
 
-    // 重新获取余额（转账后的最新余额）
-    balance0 = IERC20(token0).balanceOf(address(this));
-    balance1 = IERC20(token1).balanceOf(address(this));
+    // 更新余额
+    balance0 = IERC20(_token0).balanceOf(address(this));
+    balance1 = IERC20(_token1).balanceOf(address(this));
 
-    // 更新储备金状态
+    // 更新储备金
     _update(balance0, balance1);
 
-    // 发出流动性移除事件
-    emit Burn(msg.sender, amount0, amount1);
+    emit Burn(msg.sender, amount0, amount1, to);
 }
 ```
 
@@ -109,6 +97,7 @@ function burn() public returns (uint256 amount0, uint256 amount1) {
 **关键设计决策**：使用当前余额 `balance0/balance1` 而非储备金 `reserve0/reserve1` 进行计算。
 
 **原因分析**：
+
 - **包含累积费用**：当前余额包含了交易费用的累积
 - **反映真实价值**：LP 代币持有者应该分享交易费用收益
 - **数学一致性**：确保所有 LP 代币持有者按比例分享池子的全部价值
@@ -116,8 +105,8 @@ function burn() public returns (uint256 amount0, uint256 amount1) {
 #### 2. 安全转账机制
 
 ```solidity
-_safeTransfer(token0, msg.sender, amount0);
-_safeTransfer(token1, msg.sender, amount1);
+_safeTransfer(token0, to, amount0);
+_safeTransfer(token1, to, amount1);
 ```
 
 **安全考虑**：
