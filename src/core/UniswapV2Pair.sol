@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../libraries/Math.sol";
 import "../libraries/UQ112x112.sol";
 import "../security/ReentrancyGuard.sol";
@@ -34,26 +35,37 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     bytes4 private constant SELECTOR = bytes4(keccak256(bytes("transfer(address,uint256)")));
 
     // ============ 状态变量 ============
+    // 存储优化设计：合理布局变量以节省 Gas
+    // 存储槽分布详解：
+    // 槽 0: token0 (20 bytes) + 未使用 (12 bytes)
+    // 槽 1: token1 (20 bytes) + 未使用 (12 bytes)  
+    // 槽 2: reserve0 (14 bytes) + reserve1 (14 bytes) + blockTimestampLast (4 bytes) = 32 bytes (完美打包！)
+    // 槽 3: price0CumulativeLast (32 bytes)
+    // 槽 4: price1CumulativeLast (32 bytes)
 
-    /// @notice 交易对中的第一个代币地址
+    /// @notice 交易对中的第一个代币地址 (存储槽 0)
     address public token0;
 
-    /// @notice 交易对中的第二个代币地址
+    /// @notice 交易对中的第二个代币地址 (存储槽 1)
     address public token1;
 
-    /// @notice token0 的储备量
+    /// @notice token0 的储备量 (存储槽 2 - 打包变量 1/3)
+    /// @dev 使用 uint112 而不是 uint256，与下面两个变量共享一个存储槽
+    /// @dev uint112 最大值 ≈ 5.19 × 10^33，足够表示任何现实中的代币储备量
     uint112 private reserve0;
 
-    /// @notice token1 的储备量
+    /// @notice token1 的储备量 (存储槽 2 - 打包变量 2/3)  
+    /// @dev 与 reserve0 和 blockTimestampLast 共享存储槽以节省 Gas
     uint112 private reserve1;
 
-    /// @notice 最后更新储备的区块时间戳
+    /// @notice 最后更新储备的区块时间戳 (存储槽 2 - 打包变量 3/3)
+    /// @dev uint32 可表示到 2106 年，与 reserve0、reserve1 完美打包到一个存储槽
     uint32 private blockTimestampLast;
 
-    /// @notice token0 相对 token1 的累积价格（用于 TWAP 计算）
+    /// @notice token0 相对 token1 的累积价格（用于 TWAP 计算）(存储槽 3)
     uint256 public price0CumulativeLast;
 
-    /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）
+    /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）(存储槽 4)
     uint256 public price1CumulativeLast;
 
     // ============ 事件定义 ============
@@ -124,13 +136,23 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
      * @param balance0 token0 的新余额
      * @param balance1 token1 的新余额
      */
+    /**
+     * @notice 更新储备金和累积价格
+     * @dev 关键优化：一次 SSTORE 操作更新三个打包在同一存储槽中的值
+     * @param balance0 token0 的新余额
+     * @param balance1 token1 的新余额
+     */
     function _update(uint256 balance0, uint256 balance1) private {
+        // 检查数值是否超出 uint112 范围
         if (balance0 > type(uint112).max || balance1 > type(uint112).max) revert Overflow();
 
+        // 读取当前储备值（一次 SLOAD 操作读取打包的三个值）
         uint112 _reserve0 = reserve0;
         uint112 _reserve1 = reserve1;
+        uint32 _blockTimestampLast = blockTimestampLast;
+        
         uint32 blockTimestamp = uint32(block.timestamp % 2**32);
-        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+        uint32 timeElapsed = blockTimestamp - _blockTimestampLast;
 
         // 更新累积价格（仅在时间推移且储备量非零时）
         if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
@@ -144,6 +166,8 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
             }
         }
 
+        // 关键优化：一次 SSTORE 操作更新三个值（从 3 次 SSTORE 优化为 1 次）
+        // 这三个变量打包在同一个存储槽中，同时更新只需要一次存储操作
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
         blockTimestampLast = blockTimestamp;
@@ -307,10 +331,3 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     }
 }
 
-/**
- * @notice ERC20 接口
- */
-interface IERC20 {
-    function balanceOf(address owner) external view returns (uint256);
-    function transfer(address to, uint256 value) external returns (bool);
-}

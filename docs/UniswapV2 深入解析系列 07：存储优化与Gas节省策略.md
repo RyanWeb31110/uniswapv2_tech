@@ -1,7 +1,5 @@
 # UniswapV2 深入解析系列 07：存储优化与Gas节省策略
 
-## 系列文章简介
-
 本系列文章将带您从零开始深入理解和构建 UniswapV2 去中心化交易所，通过实际编码实现来掌握自动做市商（AMM）机制的核心原理。本篇将深入探讨 UniswapV2 中的存储优化技术和 Gas 节省策略。
 
 ## 引言：为什么需要存储优化？
@@ -56,7 +54,7 @@ contract UniswapV2Pair {
     // 存储槽 1：token1 地址 (20 bytes) 
     address public token1;
     
-    // 存储槽 2：三个变量打包在一起 (112 + 112 + 32 = 256 bits)
+    // 存储槽 2：三个变量打包在一起 (112 + 112 + 32 = 256 bits = 32 bytes)
     uint112 private reserve0;           // token0 储备量 (14 bytes)
     uint112 private reserve1;           // token1 储备量 (14 bytes)
     uint32 private blockTimestampLast;  // 最后更新时间戳 (4 bytes)
