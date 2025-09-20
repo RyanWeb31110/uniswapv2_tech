@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "../libraries/Math.sol";
+import "../libraries/UQ112x112.sol";
 import "../security/ReentrancyGuard.sol";
 
 /**
@@ -12,6 +13,7 @@ import "../security/ReentrancyGuard.sol";
  */
 contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     using Math for uint256;
+    using UQ112x112 for uint224;
 
     // ============ 自定义错误 ============
 
@@ -47,6 +49,12 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
 
     /// @notice 最后更新储备的区块时间戳
     uint32 private blockTimestampLast;
+
+    /// @notice token0 相对 token1 的累积价格（用于 TWAP 计算）
+    uint256 public price0CumulativeLast;
+
+    /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）
+    uint256 public price1CumulativeLast;
 
     // ============ 事件定义 ============
 
@@ -112,14 +120,30 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     }
 
     /**
-     * @notice 更新储备金
+     * @notice 更新储备金和累积价格
      * @param balance0 token0 的新余额
      * @param balance1 token1 的新余额
      */
     function _update(uint256 balance0, uint256 balance1) private {
         if (balance0 > type(uint112).max || balance1 > type(uint112).max) revert Overflow();
 
+        uint112 _reserve0 = reserve0;
+        uint112 _reserve1 = reserve1;
         uint32 blockTimestamp = uint32(block.timestamp % 2**32);
+        uint32 timeElapsed = blockTimestamp - blockTimestampLast;
+
+        // 更新累积价格（仅在时间推移且储备量非零时）
+        if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
+            // 使用 unchecked 避免溢出检查，因为累积价格允许溢出
+            unchecked {
+                // 计算并累积 token0 相对 token1 的价格
+                price0CumulativeLast += uint(UQ112x112.encode(_reserve1).uqdiv(_reserve0)) * timeElapsed;
+
+                // 计算并累积 token1 相对 token0 的价格
+                price1CumulativeLast += uint(UQ112x112.encode(_reserve0).uqdiv(_reserve1)) * timeElapsed;
+            }
+        }
+
         reserve0 = uint112(balance0);
         reserve1 = uint112(balance1);
         blockTimestampLast = blockTimestamp;
