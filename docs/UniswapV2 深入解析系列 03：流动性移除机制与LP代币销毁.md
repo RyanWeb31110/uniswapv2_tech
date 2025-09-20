@@ -285,6 +285,7 @@ function testBurnUnbalancedDifferentUsers() public {
 - 影响程度：微不足道
 
 **多用户场景**：
+
 - 惩罚：0.5 ether token0  
 - 相对损失：0.5/2 = 25%
 - 影响程度：非常显著

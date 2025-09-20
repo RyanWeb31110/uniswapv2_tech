@@ -3,13 +3,14 @@ pragma solidity ^0.8.30;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "../libraries/Math.sol";
+import "../security/ReentrancyGuard.sol";
 
 /**
  * @title UniswapV2Pair 核心交易对合约
  * @notice 管理特定代币对的流动性和交易
  * @dev 每个合约实例只处理一个代币对，实现核心的流动性管理功能
  */
-contract UniswapV2Pair is ERC20Permit {
+contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     using Math for uint256;
 
     // ============ 自定义错误 ============
@@ -133,7 +134,7 @@ contract UniswapV2Pair is ERC20Permit {
      * @dev 调用前需要先将代币转账到合约地址
      * @return liquidity 铸造的 LP 代币数量
      */
-    function mint(address to) external returns (uint256 liquidity) {
+    function mint(address to) external nonReentrant returns (uint256 liquidity) {
         (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // 获取储备金，节省 gas
 
         // 获取当前合约在两种代币中的余额
@@ -182,7 +183,7 @@ contract UniswapV2Pair is ERC20Permit {
      * @return amount0 返还的 token0 数量
      * @return amount1 返还的 token1 数量
      */
-    function burn(address to) external returns (uint256 amount0, uint256 amount1) {
+    function burn(address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
         address _token0 = token0; // 节省 gas
         address _token1 = token1; // 节省 gas
 
@@ -217,12 +218,14 @@ contract UniswapV2Pair is ERC20Permit {
 
     /**
      * @notice 代币交换函数
-     * @param amount0Out 输出的 token0 数量
-     * @param amount1Out 输出的 token1 数量
+     * @param amount0Out 期望获得的 token0 数量
+     * @param amount1Out 期望获得的 token1 数量
      * @param to 接收代币的地址
      * @param data 用于闪电贷的回调数据（本实现暂不支持）
+     * @dev 使用预转账模式，调用前需要先向合约转入要交换的代币
      */
-    function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external {
+    function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external nonReentrant {
+        // 至少需要指定一个输出数量
         if (amount0Out <= 0 && amount1Out <= 0) revert InsufficientOutputAmount();
 
         (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // 获取储备金
