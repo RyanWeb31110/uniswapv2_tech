@@ -125,17 +125,13 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
      * @param token 代币地址
      * @param to 接收地址
      * @param value 转账数量
+     * @dev 使用低级别调用确保与各种 ERC20 实现的兼容性
      */
     function _safeTransfer(address token, address to, uint256 value) private {
         (bool success, bytes memory data) = token.call(abi.encodeWithSelector(SELECTOR, to, value));
         require(success && (data.length == 0 || abi.decode(data, (bool))), "ZUniswapV2: TRANSFER_FAILED");
     }
 
-    /**
-     * @notice 更新储备金和累积价格
-     * @param balance0 token0 的新余额
-     * @param balance1 token1 的新余额
-     */
     /**
      * @notice 更新储备金和累积价格
      * @dev 关键优化：一次 SSTORE 操作更新三个打包在同一存储槽中的值
