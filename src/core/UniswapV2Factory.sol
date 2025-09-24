@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./UniswapV2Pair.sol";
+import "../libraries/UniswapV2Library.sol";
 
 /**
  * @title UniswapV2Factory 工厂合约
@@ -89,20 +90,16 @@ contract UniswapV2Factory is IUniswapV2Factory {
     function createPair(address tokenA, address tokenB) external override returns (address pair) {
         // 1. 验证输入参数
         if (tokenA == tokenB) revert IdenticalAddresses();
+        if (tokenA == address(0) || tokenB == address(0)) revert ZeroAddress();
 
         // 2. 标准化代币地址顺序（字典序排序）
         // 确保交易对唯一性：ETH/USDC 和 USDC/ETH 是同一个交易对
-        (address token0, address token1) = tokenA < tokenB
-            ? (tokenA, tokenB)
-            : (tokenB, tokenA);
+        (address token0, address token1) = UniswapV2Library.sortTokens(tokenA, tokenB);
 
-        // 3. 验证地址有效性
-        if (token0 == address(0)) revert ZeroAddress();
-
-        // 4. 检查交易对是否已存在
+        // 3. 检查交易对是否已存在
         if (pairs[token0][token1] != address(0)) revert PairExists();
 
-        // 5. 使用CREATE2确定性部署
+        // 4. 使用CREATE2确定性部署
         // CREATE2的优势：
         // - 可预测地址：部署前就能计算出交易对地址
         // - Gas优化：避免地址查询的额外开销
@@ -157,12 +154,12 @@ contract UniswapV2Factory is IUniswapV2Factory {
     /**
      * @notice 预计算交易对地址
      * @dev 利用CREATE2的确定性特性，无需部署即可计算地址
-     * @param token0 第一个代币地址（需已排序）
-     * @param token1 第二个代币地址（需已排序）
+     * @param tokenA 第一个代币地址（函数内部会自动排序）
+     * @param tokenB 第二个代币地址（函数内部会自动排序）
      * @return pair 预计算的交易对地址
      */
-    function computePairAddress(address token0, address token1) external view returns (address pair) {
-        require(token0 < token1, "UniswapV2Factory: TOKENS_NOT_SORTED");
+    function computePairAddress(address tokenA, address tokenB) external view returns (address pair) {
+        (address token0, address token1) = UniswapV2Library.sortTokens(tokenA, tokenB);
 
         bytes32 salt = keccak256(abi.encodePacked(token0, token1));
         bytes32 hash = keccak256(
