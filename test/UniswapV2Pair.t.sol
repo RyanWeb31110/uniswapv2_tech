@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
 import "../src/core/UniswapV2Pair.sol";
+import "../src/core/UniswapV2Factory.sol";
 import "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
 /**
@@ -22,6 +23,9 @@ contract UniswapV2PairTest is Test {
     /// @notice 被测试的交易对合约
     UniswapV2Pair pair;
 
+    /// @notice 工厂合约
+    UniswapV2Factory factory;
+
     /// @notice 测试账户地址
     address testUser = address(0x1234);
 
@@ -36,8 +40,17 @@ contract UniswapV2PairTest is Test {
         token0 = new ERC20Mock();
         token1 = new ERC20Mock();
 
-        // 创建交易对合约
-        pair = new UniswapV2Pair(address(token0), address(token1));
+        // 确保token0地址小于token1地址（符合Uniswap标准）
+        if (address(token0) > address(token1)) {
+            (token0, token1) = (token1, token0);
+        }
+
+        // 创建工厂合约
+        factory = new UniswapV2Factory(address(this));
+
+        // 通过工厂创建交易对合约
+        address pairAddress = factory.createPair(address(token0), address(token1));
+        pair = UniswapV2Pair(pairAddress);
 
         // 为测试合约铸造代币
         token0.mint(address(this), 10 ether);

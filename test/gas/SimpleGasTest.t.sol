@@ -4,6 +4,7 @@ pragma solidity ^0.8.30;
 import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import "../../src/core/UniswapV2Pair.sol";
+import "../../src/core/UniswapV2Factory.sol";
 import "../../src/libraries/StorageOptimization.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -14,20 +15,23 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
  */
 contract SimpleGasTest is Test {
     UniswapV2Pair pair;
+    UniswapV2Factory factory;
     TestToken token0;
     TestToken token1;
-    
+
     address user1 = makeAddr("user1");
 
     function setUp() public {
         token0 = new TestToken("Token0", "TKN0", 18);
         token1 = new TestToken("Token1", "TKN1", 18);
-        
+
         if (address(token0) > address(token1)) {
             (token0, token1) = (token1, token0);
         }
 
-        pair = new UniswapV2Pair(address(token0), address(token1));
+        factory = new UniswapV2Factory(address(this));
+        address pairAddress = factory.createPair(address(token0), address(token1));
+        pair = UniswapV2Pair(pairAddress);
         token0.mint(user1, 1000 ether);
         token1.mint(user1, 1000 ether);
     }

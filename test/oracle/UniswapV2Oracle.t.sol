@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
 import "../../src/core/UniswapV2Pair.sol";
+import "../../src/core/UniswapV2Factory.sol";
 import "../../src/oracle/UniswapV2Oracle.sol";
 import "../../src/oracle/AdvancedOracle.sol";
 import "../../src/libraries/UQ112x112.sol";
@@ -19,6 +20,7 @@ contract UniswapV2OracleTest is Test {
     // ============ 测试合约实例 ============
 
     UniswapV2Pair pair;
+    UniswapV2Factory factory;
     UniswapV2Oracle oracle;
     AdvancedOracle advancedOracle;
     ERC20Mock tokenA;
@@ -41,8 +43,15 @@ contract UniswapV2OracleTest is Test {
         tokenA = new ERC20Mock();
         tokenB = new ERC20Mock();
 
-        // 部署交易对合约
-        pair = new UniswapV2Pair(address(tokenA), address(tokenB));
+        // 确保代币地址按字典序排列
+        if (address(tokenA) > address(tokenB)) {
+            (tokenA, tokenB) = (tokenB, tokenA);
+        }
+
+        // 部署工厂合约和交易对合约
+        factory = new UniswapV2Factory(address(this));
+        address pairAddress = factory.createPair(address(tokenA), address(tokenB));
+        pair = UniswapV2Pair(pairAddress);
 
         // 部署预言机合约
         oracle = new UniswapV2Oracle();
@@ -282,9 +291,20 @@ contract UniswapV2OracleTest is Test {
      */
     function testBatchOperations() public {
         // 创建多个交易对用于测试
-        UniswapV2Pair pair2 = new UniswapV2Pair(address(tokenA), address(tokenB));
-        tokenA.transfer(address(pair2), INITIAL_LIQUIDITY);
-        tokenB.transfer(address(pair2), INITIAL_LIQUIDITY);
+        // 注意：为了测试需要，我们创建新的代币对来避免干扰主交易对
+        ERC20Mock newTokenA = new ERC20Mock();
+        ERC20Mock newTokenB = new ERC20Mock();
+        if (address(newTokenA) > address(newTokenB)) {
+            (newTokenA, newTokenB) = (newTokenB, newTokenA);
+        }
+        address pair2Address = factory.createPair(address(newTokenA), address(newTokenB));
+        UniswapV2Pair pair2 = UniswapV2Pair(pair2Address);
+
+        // 为新交易对准备流动性
+        newTokenA.mint(address(this), INITIAL_SUPPLY);
+        newTokenB.mint(address(this), INITIAL_SUPPLY);
+        newTokenA.transfer(address(pair2), INITIAL_LIQUIDITY);
+        newTokenB.transfer(address(pair2), INITIAL_LIQUIDITY);
         pair2.mint(address(this));
 
         address[] memory pairs = new address[](2);
@@ -363,13 +383,19 @@ contract UniswapV2OracleTest is Test {
      */
     function testExtremePriceRatios() public {
         // 创建极端价格比例的流动性池
-        UniswapV2Pair extremePair = new UniswapV2Pair(address(tokenA), address(tokenB));
+        ERC20Mock extremeTokenA = new ERC20Mock();
+        ERC20Mock extremeTokenB = new ERC20Mock();
+        if (address(extremeTokenA) > address(extremeTokenB)) {
+            (extremeTokenA, extremeTokenB) = (extremeTokenB, extremeTokenA);
+        }
+        address extremePairAddress = factory.createPair(address(extremeTokenA), address(extremeTokenB));
+        UniswapV2Pair extremePair = UniswapV2Pair(extremePairAddress);
 
         // 添加极端比例的流动性 (1000:1)
-        tokenA.mint(address(this), 1000 ether);
-        tokenB.mint(address(this), 1 ether);
-        tokenA.transfer(address(extremePair), 1000 ether);
-        tokenB.transfer(address(extremePair), 1 ether);
+        extremeTokenA.mint(address(this), 1000 ether);
+        extremeTokenB.mint(address(this), 1 ether);
+        extremeTokenA.transfer(address(extremePair), 1000 ether);
+        extremeTokenB.transfer(address(extremePair), 1 ether);
         extremePair.mint(address(this));
 
         // 测试预言机在极端比例下的工作情况

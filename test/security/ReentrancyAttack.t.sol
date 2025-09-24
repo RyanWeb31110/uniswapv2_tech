@@ -3,6 +3,7 @@ pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
 import "../../src/core/UniswapV2Pair.sol";
+import "../../src/core/UniswapV2Factory.sol";
 import "../mocks/MaliciousToken.sol";
 import "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
@@ -16,6 +17,7 @@ contract ReentrancyAttackTest is Test {
 
     UniswapV2Pair public pair;
     UniswapV2Pair public maliciousPair;
+    UniswapV2Factory public factory;
     ERC20Mock public tokenA;
     ERC20Mock public tokenB;
     MaliciousToken public maliciousToken;
@@ -34,17 +36,32 @@ contract ReentrancyAttackTest is Test {
         tokenA = new ERC20Mock();
         tokenB = new ERC20Mock();
 
+        // 确保代币地址按字典序排列
+        if (address(tokenA) > address(tokenB)) {
+            (tokenA, tokenB) = (tokenB, tokenA);
+        }
+
         // 创建恶意代币
         maliciousToken = new MaliciousToken();
 
         // 创建闪电贷攻击者
         flashAttacker = new FlashLoanAttacker();
 
+        // 创建工厂合约
+        factory = new UniswapV2Factory(address(this));
+
         // 创建正常的交易对
-        pair = new UniswapV2Pair(address(tokenA), address(tokenB));
+        address pairAddress = factory.createPair(address(tokenA), address(tokenB));
+        pair = UniswapV2Pair(pairAddress);
 
         // 创建包含恶意代币的交易对
-        maliciousPair = new UniswapV2Pair(address(maliciousToken), address(tokenB));
+        address maliciousPairAddress;
+        if (address(maliciousToken) < address(tokenB)) {
+            maliciousPairAddress = factory.createPair(address(maliciousToken), address(tokenB));
+        } else {
+            maliciousPairAddress = factory.createPair(address(tokenB), address(maliciousToken));
+        }
+        maliciousPair = UniswapV2Pair(maliciousPairAddress);
 
         // 设置恶意代币的目标
         maliciousToken.setPair(address(maliciousPair));
@@ -102,7 +119,15 @@ contract ReentrancyAttackTest is Test {
     function testMintReentrancyProtection() public {
         // 创建一个会在 mint 时攻击的恶意代币
         MaliciousTokenMint maliciousMint = new MaliciousTokenMint();
-        UniswapV2Pair mintPair = new UniswapV2Pair(address(maliciousMint), address(tokenB));
+
+        // 通过工厂创建交易对
+        address mintPairAddress;
+        if (address(maliciousMint) < address(tokenB)) {
+            mintPairAddress = factory.createPair(address(maliciousMint), address(tokenB));
+        } else {
+            mintPairAddress = factory.createPair(address(tokenB), address(maliciousMint));
+        }
+        UniswapV2Pair mintPair = UniswapV2Pair(mintPairAddress);
         maliciousMint.setPair(address(mintPair));
 
         // 为恶意代币准备流动性
@@ -225,7 +250,15 @@ contract ReentrancyAttackTest is Test {
     function testNestedReentrancy() public {
         // 创建嵌套攻击的恶意代币
         NestedAttackToken nestedToken = new NestedAttackToken();
-        UniswapV2Pair nestedPair = new UniswapV2Pair(address(nestedToken), address(tokenB));
+
+        // 通过工厂创建交易对
+        address nestedPairAddress;
+        if (address(nestedToken) < address(tokenB)) {
+            nestedPairAddress = factory.createPair(address(nestedToken), address(tokenB));
+        } else {
+            nestedPairAddress = factory.createPair(address(tokenB), address(nestedToken));
+        }
+        UniswapV2Pair nestedPair = UniswapV2Pair(nestedPairAddress);
         nestedToken.setPair(address(nestedPair));
 
         // 初始化流动性

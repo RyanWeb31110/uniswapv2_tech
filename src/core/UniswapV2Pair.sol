@@ -6,13 +6,14 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../libraries/Math.sol";
 import "../libraries/UQ112x112.sol";
 import "../security/ReentrancyGuard.sol";
+import "./interfaces/IUniswapV2Pair.sol";
 
 /**
  * @title UniswapV2Pair 核心交易对合约
  * @notice 管理特定代币对的流动性和交易
  * @dev 每个合约实例只处理一个代币对，实现核心的流动性管理功能
  */
-contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
+contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
     using Math for uint256;
     using UQ112x112 for uint224;
 
@@ -25,6 +26,8 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     error InsufficientLiquidity();
     error InvalidTo();
     error Overflow();
+    error Forbidden();
+    error AlreadyInitialized();
 
     // ============ 常量定义 ============
 
@@ -37,35 +40,39 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     // ============ 状态变量 ============
     // 存储优化设计：合理布局变量以节省 Gas
     // 存储槽分布详解：
-    // 槽 0: token0 (20 bytes) + 未使用 (12 bytes)
-    // 槽 1: token1 (20 bytes) + 未使用 (12 bytes)  
-    // 槽 2: reserve0 (14 bytes) + reserve1 (14 bytes) + blockTimestampLast (4 bytes) = 32 bytes (完美打包！)
-    // 槽 3: price0CumulativeLast (32 bytes)
-    // 槽 4: price1CumulativeLast (32 bytes)
+    // 槽 0: factory (20 bytes) + 未使用 (12 bytes)
+    // 槽 1: token0 (20 bytes) + 未使用 (12 bytes)
+    // 槽 2: token1 (20 bytes) + 未使用 (12 bytes)
+    // 槽 3: reserve0 (14 bytes) + reserve1 (14 bytes) + blockTimestampLast (4 bytes) = 32 bytes (完美打包！)
+    // 槽 4: price0CumulativeLast (32 bytes)
+    // 槽 5: price1CumulativeLast (32 bytes)
 
-    /// @notice 交易对中的第一个代币地址 (存储槽 0)
-    address public token0;
+    /// @notice 工厂合约地址 (存储槽 0)
+    address public factory;
 
-    /// @notice 交易对中的第二个代币地址 (存储槽 1)
-    address public token1;
+    /// @notice 交易对中的第一个代币地址 (存储槽 1)
+    address public override token0;
 
-    /// @notice token0 的储备量 (存储槽 2 - 打包变量 1/3)
+    /// @notice 交易对中的第二个代币地址 (存储槽 2)
+    address public override token1;
+
+    /// @notice token0 的储备量 (存储槽 3 - 打包变量 1/3)
     /// @dev 使用 uint112 而不是 uint256，与下面两个变量共享一个存储槽
     /// @dev uint112 最大值 ≈ 5.19 × 10^33，足够表示任何现实中的代币储备量
     uint112 private reserve0;
 
-    /// @notice token1 的储备量 (存储槽 2 - 打包变量 2/3)  
+    /// @notice token1 的储备量 (存储槽 3 - 打包变量 2/3)
     /// @dev 与 reserve0 和 blockTimestampLast 共享存储槽以节省 Gas
     uint112 private reserve1;
 
-    /// @notice 最后更新储备的区块时间戳 (存储槽 2 - 打包变量 3/3)
+    /// @notice 最后更新储备的区块时间戳 (存储槽 3 - 打包变量 3/3)
     /// @dev uint32 可表示到 2106 年，与 reserve0、reserve1 完美打包到一个存储槽
     uint32 private blockTimestampLast;
 
-    /// @notice token0 相对 token1 的累积价格（用于 TWAP 计算）(存储槽 3)
+    /// @notice token0 相对 token1 的累积价格（用于 TWAP 计算）(存储槽 4)
     uint256 public price0CumulativeLast;
 
-    /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）(存储槽 4)
+    /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）(存储槽 5)
     uint256 public price1CumulativeLast;
 
     // ============ 事件定义 ============
@@ -91,15 +98,39 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
 
     // ============ 构造函数 ============
 
+
+    // /**
+    //  * @notice 初始化交易对合约
+    //  * @param _token0 第一个代币地址
+    //  * @param _token1 第二个代币地址
+    //  */
+    // constructor(address _token0, address _token1)
+    //     ERC20("ZUniswap V2", "ZUNI-V2")
+    //     ERC20Permit("ZUniswap V2")
+    // {
+    //     token0 = _token0;
+    //     token1 = _token1;
+    // }
+
     /**
-     * @notice 初始化交易对合约
-     * @param _token0 第一个代币地址
-     * @param _token1 第二个代币地址
+     * @notice 构造函数，设置工厂地址
+     * @dev 实际的代币地址在工厂合约部署后通过initialize函数设置
      */
-    constructor(address _token0, address _token1)
+    constructor()
         ERC20("ZUniswap V2", "ZUNI-V2")
         ERC20Permit("ZUniswap V2")
     {
+        factory = msg.sender;
+    }
+
+    /**
+     * @inheritdoc IUniswapV2Pair
+     * @dev 只能由工厂合约调用，且只能调用一次
+     */
+    function initialize(address _token0, address _token1) external override {
+        if (msg.sender != factory) revert Forbidden();
+        if (token0 != address(0) || token1 != address(0)) revert AlreadyInitialized();
+
         token0 = _token0;
         token1 = _token1;
     }
@@ -107,12 +138,9 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     // ============ 查看函数 ============
 
     /**
-     * @notice 获取储备金信息
-     * @return _reserve0 token0 储备量
-     * @return _reserve1 token1 储备量
-     * @return _blockTimestampLast 最后更新时间戳
+     * @inheritdoc IUniswapV2Pair
      */
-    function getReserves() public view returns (uint112 _reserve0, uint112 _reserve1, uint32 _blockTimestampLast) {
+    function getReserves() public view override returns (uint112 _reserve0, uint112 _reserve1, uint32 _blockTimestampLast) {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
         _blockTimestampLast = blockTimestampLast;
@@ -178,7 +206,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
      * @dev 调用前需要先将代币转账到合约地址
      * @return liquidity 铸造的 LP 代币数量
      */
-    function mint(address to) external nonReentrant returns (uint256 liquidity) {
+    function mint(address to) external override nonReentrant returns (uint256 liquidity) {
         (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // 获取储备金，节省 gas
 
         // 获取当前合约在两种代币中的余额
@@ -227,7 +255,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
      * @return amount0 返还的 token0 数量
      * @return amount1 返还的 token1 数量
      */
-    function burn(address to) external nonReentrant returns (uint256 amount0, uint256 amount1) {
+    function burn(address to) external override nonReentrant returns (uint256 amount0, uint256 amount1) {
         address _token0 = token0; // 节省 gas
         address _token1 = token1; // 节省 gas
 
@@ -268,7 +296,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
      * @param data 用于闪电贷的回调数据（本实现暂不支持）
      * @dev 使用预转账模式，调用前需要先向合约转入要交换的代币
      */
-    function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external nonReentrant {
+    function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external override nonReentrant {
         // 至少需要指定一个输出数量
         if (amount0Out <= 0 && amount1Out <= 0) revert InsufficientOutputAmount();
 
@@ -316,10 +344,20 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard {
     }
 
     /**
-     * @notice 强制同步储备金与实际余额
-     * @dev 紧急情况下使用，确保储备金与合约余额一致
+     * @inheritdoc IUniswapV2Pair
      */
-    function sync() external {
+    function skim(address to) external override {
+        address _token0 = token0; // 节省 gas
+        address _token1 = token1; // 节省 gas
+
+        _safeTransfer(_token0, to, IERC20(_token0).balanceOf(address(this)) - reserve0);
+        _safeTransfer(_token1, to, IERC20(_token1).balanceOf(address(this)) - reserve1);
+    }
+
+    /**
+     * @inheritdoc IUniswapV2Pair
+     */
+    function sync() external override {
         _update(
             IERC20(token0).balanceOf(address(this)),
             IERC20(token1).balanceOf(address(this))
