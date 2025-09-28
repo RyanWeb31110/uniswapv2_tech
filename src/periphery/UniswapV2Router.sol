@@ -27,6 +27,8 @@ contract UniswapV2Router {
     error InvalidPath();
     /// @dev 自定义错误：最终输出金额低于阈值
     error InsufficientOutputAmount();
+    /// @dev 自定义错误：所需输入金额超过用户设定上限
+    error ExcessiveInputAmount();
 
     /// @dev 工厂引用用于访问 `createPair` 与 `pairs` 映射
     IUniswapV2Factory public immutable factory;
@@ -188,6 +190,39 @@ contract UniswapV2Router {
         );
 
         // 4. 沿路径逐跳完成兑换，并把最终代币发送到目标地址
+        _swap(amounts, pathMemory, to);
+    }
+
+    /// @notice 根据目标输出值反向推导输入并完成链式兑换
+    /// @param amountOut 用户期望获得的最终目标代币数量
+    /// @param amountInMax 用户可接受的最大输入金额，用于滑点保护
+    /// @param path 兑换路径，首元素为输入代币，末元素为目标代币
+    /// @param to 最终接收兑换结果的地址
+    /// @return amounts 每一步兑换实际使用的金额序列
+    function swapTokensForExactTokens(
+        uint256 amountOut,
+        uint256 amountInMax,
+        address[] calldata path,
+        address to
+    ) external returns (uint256[] memory amounts) {
+        // 1. 校验基础参数，确保路径长度与接收者有效
+        if (to == address(0)) revert InvalidRecipient();
+        address[] memory pathMemory = path;
+        if (pathMemory.length < 2) revert InvalidPath();
+
+        // 2. 通过库函数推导每一跳所需输入，并校验最大可接受输入
+        amounts = UniswapV2Library.getAmountsIn(address(factory), amountOut, pathMemory);
+        if (amounts[0] > amountInMax) revert ExcessiveInputAmount();
+
+        // 3. 将首笔输入发送至首个 Pair，为链式兑换做准备
+        _safeTransferFrom(
+            pathMemory[0],
+            msg.sender,
+            UniswapV2Library.pairFor(address(factory), pathMemory[0], pathMemory[1]),
+            amounts[0]
+        );
+
+        // 4. 循环执行多跳兑换并将最终代币转交给接收者
         _swap(amounts, pathMemory, to);
     }
 

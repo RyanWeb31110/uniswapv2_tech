@@ -100,6 +100,28 @@ library UniswapV2Library {
         amountOut = numerator / denominator;
     }
 
+    /// @notice 根据目标输出金额推导所需的最小输入金额
+    /// @param amountOut 用户期望获得的代币数量
+    /// @param reserveIn 当前交易对中输入代币的储备量
+    /// @param reserveOut 当前交易对中输出代币的储备量
+    /// @return amountIn 满足兑换的最小输入金额
+    function getAmountIn(
+        uint256 amountOut,
+        uint112 reserveIn,
+        uint112 reserveOut
+    ) internal pure returns (uint256 amountIn) {
+        // 1. 参数校验：输出目标为零或储备不足时直接回退
+        if (amountOut == 0) revert InsufficientAmount();
+        if (reserveIn == 0 || reserveOut == 0 || amountOut >= reserveOut) revert InsufficientLiquidity();
+
+        // 2. 将恒定乘积公式整理为输入金额的显式解
+        uint256 numerator = uint256(reserveIn) * amountOut * 1000;
+        uint256 denominator = (uint256(reserveOut) - amountOut) * 997;
+
+        // 3. 通过加一抵消整数除法的向下取整误差
+        amountIn = numerator / denominator + 1;
+    }
+
     /// @notice 计算指定代币对的交易对地址
     /// @param factory 工厂合约地址
     /// @param tokenA 兑换路径中的源代币地址
@@ -128,6 +150,27 @@ library UniswapV2Library {
         for (uint256 i; i < path.length - 1; i++) {
             (uint112 reserveIn, uint112 reserveOut) = getReserves(factory, path[i], path[i + 1]);
             amounts[i + 1] = getAmountOut(amounts[i], reserveIn, reserveOut);
+        }
+    }
+
+    /// @notice 推导多跳兑换中所需的最小输入金额序列
+    /// @param factory 工厂合约地址
+    /// @param amountOut 目标兑换路径的最终输出数量
+    /// @param path 兑换路径，长度至少为 2
+    /// @return amounts 与路径等长的金额数组，`amounts[0]` 为最小输入金额
+    function getAmountsIn(
+        address factory,
+        uint256 amountOut,
+        address[] memory path
+    ) internal view returns (uint256[] memory amounts) {
+        if (path.length < 2) revert InvalidPath();
+
+        amounts = new uint256[](path.length);
+        amounts[amounts.length - 1] = amountOut;
+
+        for (uint256 i = path.length - 1; i > 0; i--) {
+            (uint112 reserveIn, uint112 reserveOut) = getReserves(factory, path[i - 1], path[i]);
+            amounts[i - 1] = getAmountIn(amounts[i], reserveIn, reserveOut);
         }
     }
 }
