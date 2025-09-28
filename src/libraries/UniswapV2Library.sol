@@ -71,4 +71,29 @@ library UniswapV2Library {
         // 3. 按照恒定乘积公式推导对应的另一侧需求量
         amountB = (amountA * reserveB) / reserveA;
     }
+
+    /// @notice 根据恒定乘积模型计算交换可获得的输出金额
+    /// @param amountIn 用户输入的源资产数量
+    /// @param reserveIn 源资产在交易对中的当前储备量
+    /// @param reserveOut 目标资产在交易对中的当前储备量
+    /// @return amountOut 扣除手续费后实际可领取的目标资产数量
+    function getAmountOut(
+        uint256 amountIn,
+        uint112 reserveIn,
+        uint112 reserveOut
+    ) internal pure returns (uint256 amountOut) {
+        // 1. 参数校验：输入为零或储备不足时直接回退
+        if (amountIn == 0) revert InsufficientAmount();
+        if (reserveIn == 0 || reserveOut == 0) revert InsufficientLiquidity();
+
+        // 2. 计算扣除手续费后的有效输入金额
+        uint256 amountInWithFee = amountIn * 997;
+
+        // 3. 根据恒定乘积公式推导输出金额的显式解
+        uint256 numerator = amountInWithFee * reserveOut;
+        uint256 denominator = uint256(reserveIn) * 1000 + amountInWithFee;
+
+        // 4. 向下取整保证安全边界，返回最终可领取数量
+        amountOut = numerator / denominator;
+    }
 }
