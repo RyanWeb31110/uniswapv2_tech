@@ -9,15 +9,28 @@ import {UniswapV2Library} from "../libraries/UniswapV2Library.sol";
 /// @title UniswapV2Router
 /// @notice 统一封装流动性管理与兑换逻辑的路由器合约
 contract UniswapV2Router {
+    /// @dev 自定义错误：输入代币地址相同
+    error IdenticalAddresses();
+    /// @dev 自定义错误：接收者地址无效
+    error InvalidRecipient();
+    /// @dev 自定义错误：目标交易对不存在
+    error PairNotFound();
+    /// @dev 自定义错误：tokenA 数量低于最低阈值
+    error InsufficientAAmount();
+    /// @dev 自定义错误：tokenB 数量低于最低阈值
+    error InsufficientBAmount();
+    /// @dev 自定义错误：工厂地址未传入
+    error FactoryAddressRequired();
+    /// @dev 自定义错误：transferFrom 调用失败
+    error TransferFromFailed();
+
     /// @dev 工厂引用用于访问 `createPair` 与 `pairs` 映射
     IUniswapV2Factory public immutable factory;
 
     /// @notice 初始化路由器并绑定工厂地址
     /// @param factoryAddress 已部署的工厂合约地址
     constructor(address factoryAddress) {
-        if (factoryAddress == address(0)) {
-            revert("Factory address is required");
-        }
+        if (factoryAddress == address(0)) revert FactoryAddressRequired();
         factory = IUniswapV2Factory(factoryAddress);
     }
 
@@ -42,8 +55,8 @@ contract UniswapV2Router {
         address to
     ) external returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
         // 1. 基础输入校验，提前阻断异常调用场景
-        if (tokenA == tokenB) revert("IDENTICAL_ADDRESSES");
-        if (to == address(0)) revert("INVALID_RECIPIENT");
+        if (tokenA == tokenB) revert IdenticalAddresses();
+        if (to == address(0)) revert InvalidRecipient();
 
         // 2. 查询已存在的交易对，没有则即时通过工厂创建
         address pair = factory.getPair(tokenA, tokenB);
@@ -95,14 +108,50 @@ contract UniswapV2Router {
         uint256 amountBOptimal = UniswapV2Library.quote(amountADesired, reserveA, reserveB);
         if (amountBOptimal <= amountBDesired) {
             // 校验最优金额是否仍满足用户自定义的最小滑点阈值
-            if (amountBOptimal < amountBMin) revert("INSUFFICIENT_B_AMOUNT");
+            if (amountBOptimal < amountBMin) revert InsufficientBAmount();
             return (amountADesired, amountBOptimal);
         }
 
         // 4. 若 tokenB 超出上限，则换以 amountB 为基准重新匹配
         uint256 amountAOptimal = UniswapV2Library.quote(amountBDesired, reserveB, reserveA);
-        if (amountAOptimal < amountAMin) revert("INSUFFICIENT_A_AMOUNT");
+        if (amountAOptimal < amountAMin) revert InsufficientAAmount();
         return (amountAOptimal, amountBDesired);
+    }
+
+
+    /// @notice 从指定交易对中移除流动性
+    /// @dev 调用前需确保调用者已对 Router 授权足够的 LP 代币
+    /// @param tokenA 交易对中的第一个代币地址
+    /// @param tokenB 交易对中的第二个代币地址
+    /// @param liquidity 欲销毁的 LP 代币数量
+    /// @param amountAMin 可接受的最小 tokenA 数量
+    /// @param amountBMin 可接受的最小 tokenB 数量
+    /// @param to 接收返还资产的地址
+    /// @return amountA 实际返还的 tokenA 数量
+    /// @return amountB 实际返还的 tokenB 数量
+    function removeLiquidity(
+        address tokenA,
+        address tokenB,
+        uint256 liquidity,
+        uint256 amountAMin,
+        uint256 amountBMin,
+        address to
+    ) external returns (uint256 amountA, uint256 amountB) {
+        // 1. 校验基础参数并定位目标交易对
+        if (tokenA == tokenB) revert IdenticalAddresses();
+        if (to == address(0)) revert InvalidRecipient();
+        address pair = factory.getPair(tokenA, tokenB);
+        if (pair == address(0)) revert PairNotFound();
+
+        // 2. 将用户持有的 LP 代币转入交易对后执行 burn
+        _safeTransferFrom(pair, msg.sender, pair, liquidity);
+        (uint256 amount0, uint256 amount1) = IUniswapV2Pair(pair).burn(to);
+
+        // 3. 标准化返回顺序并做滑点保护
+        (address token0,) = UniswapV2Library.sortTokens(tokenA, tokenB);
+        (amountA, amountB) = tokenA == token0 ? (amount0, amount1) : (amount1, amount0);
+        if (amountA < amountAMin) revert InsufficientAAmount();
+        if (amountB < amountBMin) revert InsufficientBAmount();
     }
 
     /// @notice 安全地从用户处转移代币至目标地址
@@ -113,8 +162,6 @@ contract UniswapV2Router {
             abi.encodeWithSelector(IERC20.transferFrom.selector, from, to, value)
         );
         // 2. 联合校验执行状态与返回值，确保转账真实生效
-        if (!success || (data.length != 0 && !abi.decode(data, (bool)))) {
-            revert("TRANSFER_FROM_FAILED");
-        }
+        if (!success || (data.length != 0 && !abi.decode(data, (bool)))) revert TransferFromFailed();
     }
 }

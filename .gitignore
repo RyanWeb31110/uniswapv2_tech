@@ -18,3 +18,5 @@ lib/
 lib/openzeppelin-contracts
 AGENTS.md
 AGENTS copy.md
+
+logs/

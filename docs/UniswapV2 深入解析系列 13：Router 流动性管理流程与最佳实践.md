@@ -25,15 +25,15 @@ Router 将多个链上操作汇聚为一次调用：
 /// @title UniswapV2Router
 /// @notice 统一封装流动性管理与兑换逻辑的路由器合约
 contract UniswapV2Router {
+    error FactoryAddressRequired();
+
     /// @dev 工厂引用用于访问 `createPair` 与 `pairs` 映射
     IUniswapV2Factory public immutable factory;
 
     /// @notice 初始化路由器并绑定工厂地址
     /// @param factoryAddress 已部署的工厂合约地址
     constructor(address factoryAddress) {
-        if (factoryAddress == address(0)) {
-            revert("Factory address is required");
-        }
+        if (factoryAddress == address(0)) revert FactoryAddressRequired();
         factory = IUniswapV2Factory(factoryAddress);
     }
 }
@@ -65,8 +65,8 @@ function addLiquidity(
     address to
 ) external returns (uint256 amountA, uint256 amountB, uint256 liquidity) {
     // 1. 基础输入校验，提前阻断异常调用场景
-    if (tokenA == tokenB) revert("IDENTICAL_ADDRESSES");
-    if (to == address(0)) revert("INVALID_RECIPIENT");
+    if (tokenA == tokenB) revert IdenticalAddresses();
+    if (to == address(0)) revert InvalidRecipient();
 
     // 2. 查询已存在的交易对，没有则即时通过工厂创建
     address pair = factory.getPair(tokenA, tokenB);
@@ -141,13 +141,13 @@ function _calculateLiquidity(
     uint256 amountBOptimal = UniswapV2Library.quote(amountADesired, reserveA, reserveB);
     if (amountBOptimal <= amountBDesired) {
         // 校验最优金额是否仍满足用户自定义的最小滑点阈值
-        if (amountBOptimal < amountBMin) revert("INSUFFICIENT_B_AMOUNT");
+        if (amountBOptimal < amountBMin) revert InsufficientBAmount();
         return (amountADesired, amountBOptimal);
     }
 
     // 4. 若 tokenB 超出上限，则换以 amountB 为基准重新匹配
     uint256 amountAOptimal = UniswapV2Library.quote(amountBDesired, reserveB, reserveA);
-    if (amountAOptimal < amountAMin) revert("INSUFFICIENT_A_AMOUNT");
+    if (amountAOptimal < amountAMin) revert InsufficientAAmount();
     return (amountAOptimal, amountBDesired);
 }
 ```
@@ -165,7 +165,7 @@ function _calculateLiquidity(
 ## 安全控制与参数治理
 - **授权安全**：优先采用 `permit` 或限额授权，避免无限授权被滥用；如需多账户操作可配合 `Permit2` 或 Session Key 方案。
 - **重入与顺序**：Router 自身不持有资产且遵循 CEI；Pair 在 `mint` 内部使用锁修饰符防重入，双层防护确保流程安全。
-- **异常定位**：`IDENTICAL_ADDRESSES`、`INVALID_RECIPIENT`、`INSUFFICIENT_*_AMOUNT` 是最常见错误，可在前端直接提示用户调整输入。
+- **异常定位**：`IdenticalAddresses()`、`InvalidRecipient()`、`Insufficient*Amount()` 等自定义错误最为常见，可在前端直接捕获选择器并提示用户调整输入。
 - **Gas 观测**：推荐配合 `forge snapshot` 记录 Gas 基线，添加新功能后对比差异，保持流动性操作的可预估成本。
 
 ## Foundry 测试
@@ -269,7 +269,7 @@ contract RouterAddLiquidityTest is Test {
             address(this)
         );
 
-        vm.expectRevert(bytes("INSUFFICIENT_B_AMOUNT"));
+        vm.expectRevert(UniswapV2Router.InsufficientBAmount.selector);
         router.addLiquidity(
             address(tokenA),
             address(tokenB),
