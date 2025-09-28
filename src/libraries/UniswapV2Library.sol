@@ -25,6 +25,9 @@ library UniswapV2Library {
     /// @notice 工厂中尚未存在目标交易对
     error PairNotFound();
 
+    /// @notice 兑换路径长度不符合要求
+    error InvalidPath();
+
     /// @notice 对两个代币地址进行排序，确保后续处理顺序一致
     /// @dev 按照字典序排序，返回值 token0 永远小于 token1
     function sortTokens(address tokenA, address tokenB) internal pure returns (address token0, address token1) {
@@ -95,5 +98,36 @@ library UniswapV2Library {
 
         // 4. 向下取整保证安全边界，返回最终可领取数量
         amountOut = numerator / denominator;
+    }
+
+    /// @notice 计算指定代币对的交易对地址
+    /// @param factory 工厂合约地址
+    /// @param tokenA 兑换路径中的源代币地址
+    /// @param tokenB 兑换路径中的目标代币地址
+    /// @return pair 对应的交易对合约地址
+    function pairFor(address factory, address tokenA, address tokenB) internal view returns (address pair) {
+        pair = IUniswapV2Factory(factory).getPair(tokenA, tokenB);
+        if (pair == address(0)) revert PairNotFound();
+    }
+
+    /// @notice 预估多跳兑换路径中每一步的输出金额
+    /// @param factory 工厂合约地址
+    /// @param amountIn 首个代币输入的数量
+    /// @param path 兑换路径，长度至少为 2
+    /// @return amounts 长度与路径一致的金额数组
+    function getAmountsOut(
+        address factory,
+        uint256 amountIn,
+        address[] memory path
+    ) internal view returns (uint256[] memory amounts) {
+        if (path.length < 2) revert InvalidPath();
+
+        amounts = new uint256[](path.length);
+        amounts[0] = amountIn;
+
+        for (uint256 i; i < path.length - 1; i++) {
+            (uint112 reserveIn, uint112 reserveOut) = getReserves(factory, path[i], path[i + 1]);
+            amounts[i + 1] = getAmountOut(amounts[i], reserveIn, reserveOut);
+        }
     }
 }

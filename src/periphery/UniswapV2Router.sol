@@ -23,6 +23,10 @@ contract UniswapV2Router {
     error FactoryAddressRequired();
     /// @dev 自定义错误：transferFrom 调用失败
     error TransferFromFailed();
+    /// @dev 自定义错误：兑换路径长度无效
+    error InvalidPath();
+    /// @dev 自定义错误：最终输出金额低于阈值
+    error InsufficientOutputAmount();
 
     /// @dev 工厂引用用于访问 `createPair` 与 `pairs` 映射
     IUniswapV2Factory public immutable factory;
@@ -152,6 +156,74 @@ contract UniswapV2Router {
         (amountA, amountB) = tokenA == token0 ? (amount0, amount1) : (amount1, amount0);
         if (amountA < amountAMin) revert InsufficientAAmount();
         if (amountB < amountBMin) revert InsufficientBAmount();
+    }
+
+    /// @notice 将精确的输入代币数量沿路径兑换为目标代币
+    /// @param amountIn 输入端付出的代币数量
+    /// @param amountOutMin 用户可接受的最小输出数量（滑点保护）
+    /// @param path 兑换路径，按逻辑顺序排列的代币地址数组
+    /// @param to 最终接收兑换结果的地址
+    /// @return amounts 每一步兑换返回的代币数量序列
+    function swapExactTokensForTokens(
+        uint256 amountIn,
+        uint256 amountOutMin,
+        address[] calldata path,
+        address to
+    ) external returns (uint256[] memory amounts) {
+        // 1. 基础参数校验，确保路径长度与接收者有效
+        if (to == address(0)) revert InvalidRecipient();
+        address[] memory pathMemory = path;
+        if (pathMemory.length < 2) revert InvalidPath();
+
+        // 2. 预估多跳兑换的每一步输出，并校验滑点
+        amounts = UniswapV2Library.getAmountsOut(address(factory), amountIn, pathMemory);
+        if (amounts[amounts.length - 1] < amountOutMin) revert InsufficientOutputAmount();
+
+        // 3. 将输入代币直接转入首个交易对，为链式兑换做准备
+        _safeTransferFrom(
+            pathMemory[0],
+            msg.sender,
+            UniswapV2Library.pairFor(address(factory), pathMemory[0], pathMemory[1]),
+            amounts[0]
+        );
+
+        // 4. 沿路径逐跳完成兑换，并把最终代币发送到目标地址
+        _swap(amounts, pathMemory, to);
+    }
+
+    /// @notice 沿给定路径执行链式兑换
+    /// @param amounts 每一步兑换得到的代币数量数组
+    /// @param path 兑换路径，长度需大于等于 2
+    /// @param to 最终接收者地址
+    function _swap(
+        uint256[] memory amounts,
+        address[] memory path,
+        address to
+    ) internal {
+        // 1. 预先计算路径末尾索引，避免循环中重复求值
+        uint256 lastIndex = path.length - 1;
+        for (uint256 i; i < lastIndex; i++) {
+            // 2. 逐跳解析输入与输出代币，并按字典序排序匹配 Pair 存储结构
+            (address input, address output) = (path[i], path[i + 1]);
+            (address token0,) = UniswapV2Library.sortTokens(input, output);
+
+            // 3. 读取当前跳的目标输出，并转换为符合 token0/token1 顺序的参数
+            uint256 amountOut = amounts[i + 1];
+            (uint256 amount0Out, uint256 amount1Out) = input == token0
+                ? (uint256(0), amountOut)
+                : (amountOut, uint256(0));
+
+            // 4. 查询本跳交易对地址，便于后续复用与调用 swap
+            address currentPair = UniswapV2Library.pairFor(address(factory), input, output);
+
+            // 5. 判断是否为终点跳，非终点则将输出直接发送给下一对以节省 gas
+            address recipient = i < lastIndex - 1
+                ? UniswapV2Library.pairFor(address(factory), output, path[i + 2])
+                : to;
+
+            // 6. 调用 Pair.swap 执行实际兑换，第四个参数留空以兼容未来钩子扩展
+            IUniswapV2Pair(currentPair).swap(amount0Out, amount1Out, recipient, new bytes(0));
+        }
     }
 
     /// @notice 安全地从用户处转移代币至目标地址
