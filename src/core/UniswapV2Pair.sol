@@ -7,6 +7,7 @@ import "../libraries/Math.sol";
 import "../libraries/UQ112x112.sol";
 import "../security/ReentrancyGuard.sol";
 import "./interfaces/IUniswapV2Pair.sol";
+import "./interfaces/IUniswapV2Callee.sol";
 
 /**
  * @title UniswapV2Pair 核心交易对合约
@@ -26,6 +27,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
     error InsufficientLiquidity();
     error InvalidTo();
     error Overflow();
+    error InvalidK();
     error Forbidden();
     error AlreadyInitialized();
 
@@ -292,8 +294,8 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
      * @notice 代币交换函数
      * @param amount0Out 期望获得的 token0 数量
      * @param amount1Out 期望获得的 token1 数量
-     * @param to 接收代币的地址
-     * @param data 用于闪电贷的回调数据（本实现暂不支持）
+     * @param to 接收代币或实现回调的合约地址
+     * @param data 闪电贷回调参数，非空时触发 `IUniswapV2Callee`
      * @dev 使用预转账模式，调用前需要先向合约转入要交换的代币
      */
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external override nonReentrant {
@@ -317,8 +319,9 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
             if (amount0Out > 0) _safeTransfer(_token0, to, amount0Out);
             if (amount1Out > 0) _safeTransfer(_token1, to, amount1Out);
 
-            // 闪电贷回调（暂不实现）
-            // if (data.length > 0) IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
+            if (data.length > 0) {
+                IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
+            }
 
             balance0 = IERC20(_token0).balanceOf(address(this));
             balance1 = IERC20(_token1).balanceOf(address(this));
@@ -336,7 +339,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
             uint256 balance1Adjusted = (balance1 * 1000) - (amount1In * 3);
 
             if (balance0Adjusted * balance1Adjusted < uint256(_reserve0) * _reserve1 * (1000**2))
-                revert InsufficientInputAmount();
+                revert InvalidK();
         }
 
         _update(balance0, balance1);
@@ -364,4 +367,3 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
         );
     }
 }
-
