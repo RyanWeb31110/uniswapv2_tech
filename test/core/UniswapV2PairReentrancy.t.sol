@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
+import "../../src/core/UniswapV2Factory.sol";
 import "../../src/core/UniswapV2Pair.sol";
 import "../../src/core/interfaces/IUniswapV2Callee.sol";
 import "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -42,6 +43,7 @@ contract ReentrantCallee is IUniswapV2Callee {
 contract UniswapV2PairReentrancyTest is Test {
     ERC20Mock private token0;
     ERC20Mock private token1;
+    UniswapV2Factory private factory;
     UniswapV2Pair private pair;
     ReentrantCallee private attacker;
 
@@ -49,8 +51,9 @@ contract UniswapV2PairReentrancyTest is Test {
         token0 = new ERC20Mock();
         token1 = new ERC20Mock();
 
-        pair = new UniswapV2Pair();
-        pair.initialize(address(token0), address(token1));
+        factory = new UniswapV2Factory(address(this));
+        address pairAddr = factory.createPair(address(token0), address(token1));
+        pair = UniswapV2Pair(pairAddr);
 
         token0.mint(address(this), 10 ether);
         token1.mint(address(this), 20 ether);

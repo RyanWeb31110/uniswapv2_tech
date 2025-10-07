@@ -5,6 +5,7 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../libraries/Math.sol";
 import "../libraries/UQ112x112.sol";
+import "./interfaces/IUniswapV2Factory.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Callee.sol";
 
@@ -79,6 +80,9 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
 
     /// @notice swap 函数执行状态锁，防止重入攻击
     bool private entered;
+
+    /// @notice 上一次同步后的储备乘积，用于计算协议手续费
+    uint256 public kLast;
 
     // ============ 事件定义 ============
 
@@ -214,6 +218,37 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         emit Sync(reserve0, reserve1);
     }
 
+    /**
+     * @notice 依据储备增长情况为协议方铸造额外 LP 代币
+     * @param _reserve0 当前储备中的 token0 数量
+     * @param _reserve1 当前储备中的 token1 数量
+     * @return feeOn 表示是否开启协议费用
+     */
+    function _mintFee(uint112 _reserve0, uint112 _reserve1) private returns (bool feeOn) {
+        address feeTo = IUniswapV2Factory(factory).feeTo();
+        feeOn = feeTo != address(0);
+        uint256 _kLast = kLast;
+
+        if (feeOn) {
+            if (_kLast != 0) {
+                uint256 rootK = Math.sqrt(uint256(_reserve0) * uint256(_reserve1));
+                uint256 rootKLast = Math.sqrt(_kLast);
+
+                if (rootK > rootKLast) {
+                    uint256 numerator = totalSupply() * (rootK - rootKLast);
+                    uint256 denominator = rootK * 5 + rootKLast;
+                    uint256 liquidity = numerator / denominator;
+
+                    if (liquidity > 0) {
+                        _mint(feeTo, liquidity);
+                    }
+                }
+            }
+        } else if (_kLast != 0) {
+            kLast = 0;
+        }
+    }
+
     // ============ 外部函数 ============
 
     /**
@@ -232,6 +267,7 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         uint256 amount0 = balance0 - _reserve0;
         uint256 amount1 = balance1 - _reserve1;
 
+        bool feeOn = _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply(); // 节省 gas
 
         if (_totalSupply == 0) {
@@ -259,6 +295,10 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         // 更新储备金数量
         _update(balance0, balance1);
 
+        if (feeOn) {
+            kLast = uint256(reserve0) * uint256(reserve1);
+        }
+
         // 发出添加流动性事件
         emit Mint(msg.sender, amount0, amount1);
     }
@@ -278,6 +318,7 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         uint256 balance1 = IERC20(_token1).balanceOf(address(this));
         uint256 liquidity = balanceOf(address(this));
 
+        bool feeOn = _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply(); // 节省 gas
 
         // 使用余额确保按比例分配，防止捐赠攻击
@@ -299,6 +340,10 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
 
         // 更新储备金
         _update(balance0, balance1);
+
+        if (feeOn) {
+            kLast = uint256(reserve0) * uint256(reserve1);
+        }
 
         emit Burn(msg.sender, amount0, amount1, to);
     }

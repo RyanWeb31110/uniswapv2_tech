@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import "forge-std/Test.sol";
+import "../../src/core/UniswapV2Factory.sol";
 import "../../src/core/UniswapV2Pair.sol";
 import "../../src/core/interfaces/IUniswapV2Callee.sol";
 import "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
@@ -45,14 +46,23 @@ contract Flashloaner is IUniswapV2Callee {
 contract UniswapV2PairFeeTest is Test {
     ERC20Mock private token0;
     ERC20Mock private token1;
+    UniswapV2Factory private factory;
     UniswapV2Pair private pair;
+
+    function _getAmountOut(uint256 amountIn, uint112 reserveIn, uint112 reserveOut) private pure returns (uint256) {
+        uint256 amountInWithFee = amountIn * 997;
+        uint256 numerator = amountInWithFee * reserveOut;
+        uint256 denominator = uint256(reserveIn) * 1000 + amountInWithFee;
+        return numerator / denominator;
+    }
 
     function setUp() public {
         token0 = new ERC20Mock();
         token1 = new ERC20Mock();
 
-        pair = new UniswapV2Pair();
-        pair.initialize(address(token0), address(token1));
+        factory = new UniswapV2Factory(address(this));
+        address pairAddr = factory.createPair(address(token0), address(token1));
+        pair = UniswapV2Pair(pairAddr);
 
         token0.mint(address(this), 10 ether);
         token1.mint(address(this), 20 ether);
@@ -95,5 +105,23 @@ contract UniswapV2PairFeeTest is Test {
         assertEq(reserve0After, reserve0Before, unicode"token0 储备不应变化");
         assertEq(reserve1After, reserve1Before + uint112(fee), unicode"手续费应回流交易对");
         assertEq(token1.balanceOf(address(fl)), 0, unicode"借款方应清空余额");
+    }
+
+    function testProtocolFeeAccruesToFeeTo() public {
+        address feeRecipient = address(0xFEE);
+        factory.setFeeTo(feeRecipient);
+
+        (uint112 reserve0, uint112 reserve1,) = pair.getReserves();
+        uint256 amountIn = 0.5 ether;
+        uint256 amountOut = _getAmountOut(amountIn, reserve0, reserve1);
+
+        token0.transfer(address(pair), amountIn);
+        pair.swap(0, amountOut, address(this), "");
+
+        uint256 liquidity = pair.balanceOf(address(this));
+        pair.transfer(address(pair), liquidity);
+        pair.burn(address(this));
+
+        assertGt(pair.balanceOf(feeRecipient), 0, unicode"协议费接收地址应获得 LP 份额");
     }
 }
