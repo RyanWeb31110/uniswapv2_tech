@@ -5,7 +5,6 @@ import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "../libraries/Math.sol";
 import "../libraries/UQ112x112.sol";
-import "../security/ReentrancyGuard.sol";
 import "./interfaces/IUniswapV2Pair.sol";
 import "./interfaces/IUniswapV2Callee.sol";
 
@@ -14,7 +13,7 @@ import "./interfaces/IUniswapV2Callee.sol";
  * @notice 管理特定代币对的流动性和交易
  * @dev 每个合约实例只处理一个代币对，实现核心的流动性管理功能
  */
-contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
+contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
     using Math for uint256;
     using UQ112x112 for uint224;
 
@@ -30,6 +29,7 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
     error InvalidK();
     error Forbidden();
     error AlreadyInitialized();
+    error ReentrancyGuard();
 
     // ============ 常量定义 ============
 
@@ -76,6 +76,9 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
 
     /// @notice token1 相对 token0 的累积价格（用于 TWAP 计算）(存储槽 5)
     uint256 public price1CumulativeLast;
+
+    /// @notice swap 函数执行状态锁，防止重入攻击
+    bool private entered;
 
     // ============ 事件定义 ============
 
@@ -146,6 +149,16 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
         _reserve0 = reserve0;
         _reserve1 = reserve1;
         _blockTimestampLast = blockTimestampLast;
+    }
+
+    // ============ 修饰符 ============
+
+    /// @dev 防止在同一事务内重复进入受保护函数
+    modifier nonReentrant() {
+        if (entered) revert ReentrancyGuard();
+        entered = true;
+        _;
+        entered = false;
     }
 
     // ============ 内部函数 ============
@@ -299,6 +312,10 @@ contract UniswapV2Pair is ERC20Permit, ReentrancyGuard, IUniswapV2Pair {
      * @dev 使用预转账模式，调用前需要先向合约转入要交换的代币
      */
     function swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) external override nonReentrant {
+        _swap(amount0Out, amount1Out, to, data);
+    }
+
+    function _swap(uint256 amount0Out, uint256 amount1Out, address to, bytes calldata data) private {
         // 至少需要指定一个输出数量
         if (amount0Out <= 0 && amount1Out <= 0) revert InsufficientOutputAmount();
 
