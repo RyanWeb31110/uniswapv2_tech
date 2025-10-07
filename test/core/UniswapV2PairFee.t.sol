@@ -64,6 +64,10 @@ contract UniswapV2PairFeeTest is Test {
         address pairAddr = factory.createPair(address(token0), address(token1));
         pair = UniswapV2Pair(pairAddr);
 
+        if (address(token0) != pair.token0()) {
+            (token0, token1) = (token1, token0);
+        }
+
         token0.mint(address(this), 10 ether);
         token1.mint(address(this), 20 ether);
 

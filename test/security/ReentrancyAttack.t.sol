@@ -22,6 +22,7 @@ contract ReentrancyAttackTest is Test {
     ERC20Mock public tokenB;
     MaliciousToken public maliciousToken;
     FlashLoanAttacker public flashAttacker;
+    bool public maliciousTokenIsToken0;
 
     address public attacker = makeAddr("attacker");
     address public victim = makeAddr("victim");
@@ -62,6 +63,7 @@ contract ReentrancyAttackTest is Test {
             maliciousPairAddress = factory.createPair(address(tokenB), address(maliciousToken));
         }
         maliciousPair = UniswapV2Pair(maliciousPairAddress);
+        maliciousTokenIsToken0 = maliciousPair.token0() == address(maliciousToken);
 
         // 设置恶意代币的目标
         maliciousToken.setPair(address(maliciousPair));
@@ -105,7 +107,11 @@ contract ReentrancyAttackTest is Test {
         uint256 countBefore = maliciousToken.attackCount();
 
         // 执行交换 - 外部调用会成功，但内部的重入攻击会失败
-        maliciousPair.swap(50 ether, 0, attacker, "");
+        if (maliciousTokenIsToken0) {
+            maliciousPair.swap(50 ether, 0, attacker, "");
+        } else {
+            maliciousPair.swap(0, 50 ether, attacker, "");
+        }
 
         // 验证攻击计数器递增了（说明攻击被尝试了）
         assertEq(maliciousToken.attackCount(), countBefore + 1, "Attack should have been attempted");
@@ -259,6 +265,7 @@ contract ReentrancyAttackTest is Test {
             nestedPairAddress = factory.createPair(address(tokenB), address(nestedToken));
         }
         UniswapV2Pair nestedPair = UniswapV2Pair(nestedPairAddress);
+        bool nestedTokenIsToken0 = nestedPair.token0() == address(nestedToken);
         nestedToken.setPair(address(nestedPair));
 
         // 初始化流动性
@@ -274,7 +281,11 @@ contract ReentrancyAttackTest is Test {
         tokenB.transfer(address(nestedPair), 50 ether);
 
         // 多层重入攻击应该被阻止 - 外部调用成功但内部重入失败
-        nestedPair.swap(25 ether, 0, attacker, "");
+        if (nestedTokenIsToken0) {
+            nestedPair.swap(25 ether, 0, attacker, "");
+        } else {
+            nestedPair.swap(0, 25 ether, attacker, "");
+        }
 
         // 验证攻击确实被尝试了
         assertEq(nestedToken.nestLevel(), 0, "Nest level should be reset after attack");
@@ -295,7 +306,11 @@ contract ReentrancyAttackTest is Test {
         uint256 countBefore = maliciousToken.attackCount();
 
         // 尝试攻击 - 外部调用会成功
-        maliciousPair.swap(50 ether, 0, attacker, "");
+        if (maliciousTokenIsToken0) {
+            maliciousPair.swap(50 ether, 0, attacker, "");
+        } else {
+            maliciousPair.swap(0, 50 ether, attacker, "");
+        }
 
         // 验证攻击计数器递增了
         assertEq(maliciousToken.attackCount(), countBefore + 1, "Attack counter should increment");
@@ -401,9 +416,11 @@ contract NestedAttackToken {
     address public pair;
     bool public attackEnabled = false;
     uint256 public nestLevel = 0;
+    bool public isToken0;
 
     function setPair(address _pair) external {
         pair = _pair;
+        isToken0 = UniswapV2Pair(_pair).token0() == address(this);
     }
 
     function enableAttack() external {
@@ -419,10 +436,18 @@ contract NestedAttackToken {
         // 嵌套重入攻击
         if (attackEnabled && msg.sender == pair && nestLevel < 2) {
             nestLevel++;
-            try UniswapV2Pair(pair).swap(10 ether, 0, address(this), "") {
-                // 嵌套攻击成功
-            } catch {
-                // 嵌套攻击失败
+            if (isToken0) {
+                try UniswapV2Pair(pair).swap(10 ether, 0, address(this), "") {
+                    // 嵌套攻击成功
+                } catch {
+                    // 嵌套攻击失败
+                }
+            } else {
+                try UniswapV2Pair(pair).swap(0, 10 ether, address(this), "") {
+                    // 嵌套攻击成功
+                } catch {
+                    // 嵌套攻击失败
+                }
             }
             nestLevel--;
         }

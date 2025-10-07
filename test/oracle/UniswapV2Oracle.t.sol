@@ -411,7 +411,8 @@ contract UniswapV2OracleTest is Test {
         assertGt(price1, 0, "Extreme price1 should be positive");
 
         // 验证价格关系的合理性
-        assertTrue(price0 > price1 * 1000, "price0 should be much larger than price1");
+        // reserve0 = 1000, reserve1 = 1 时，price1 (token1相对token0) 应该远大于 price0 (token0相对token1)
+        assertTrue(price1 > price0 * 1000, "price1 should be much larger than price0");
     }
 
     /**

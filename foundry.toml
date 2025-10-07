@@ -11,6 +11,9 @@ remappings = [
 optimizer = true
 optimizer_runs = 200
 
+# 启用 IR-based 编译器以解决栈太深问题
+via_ir = true
+
 # 测试配置
 verbosity = 2
 

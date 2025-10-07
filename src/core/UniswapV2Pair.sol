@@ -195,7 +195,16 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         uint32 _blockTimestampLast = blockTimestampLast;
         
         uint32 blockTimestamp = uint32(block.timestamp % 2**32);
-        uint32 timeElapsed = blockTimestamp - _blockTimestampLast;
+        uint32 timeElapsed = 0;
+        if (_blockTimestampLast != 0) {
+            unchecked {
+                if (blockTimestamp >= _blockTimestampLast) {
+                    timeElapsed = blockTimestamp - _blockTimestampLast;
+                } else {
+                    timeElapsed = (type(uint32).max - _blockTimestampLast) + blockTimestamp + 1;
+                }
+            }
+        }
 
         // 更新累积价格（仅在时间推移且储备量非零时）
         if (timeElapsed > 0 && _reserve0 != 0 && _reserve1 != 0) {
@@ -267,7 +276,7 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         uint256 amount0 = balance0 - _reserve0;
         uint256 amount1 = balance1 - _reserve1;
 
-        bool feeOn = _mintFee(_reserve0, _reserve1);
+        _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply(); // 节省 gas
 
         if (_totalSupply == 0) {
@@ -295,7 +304,10 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         // 更新储备金数量
         _update(balance0, balance1);
 
-        if (feeOn) {
+        uint256 currentTotalSupply = totalSupply();
+        if (currentTotalSupply == 0) {
+            kLast = 0;
+        } else {
             kLast = uint256(reserve0) * uint256(reserve1);
         }
 
@@ -314,11 +326,13 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         address _token0 = token0; // 节省 gas
         address _token1 = token1; // 节省 gas
 
+        (uint112 _reserve0, uint112 _reserve1,) = getReserves(); // 获取储备金
+
         uint256 balance0 = IERC20(_token0).balanceOf(address(this));
         uint256 balance1 = IERC20(_token1).balanceOf(address(this));
         uint256 liquidity = balanceOf(address(this));
 
-        bool feeOn = _mintFee(_reserve0, _reserve1);
+        _mintFee(_reserve0, _reserve1);
         uint256 _totalSupply = totalSupply(); // 节省 gas
 
         // 使用余额确保按比例分配，防止捐赠攻击
@@ -341,7 +355,10 @@ contract UniswapV2Pair is ERC20Permit, IUniswapV2Pair {
         // 更新储备金
         _update(balance0, balance1);
 
-        if (feeOn) {
+        uint256 currentTotalSupply = totalSupply();
+        if (currentTotalSupply == 0) {
+            kLast = 0;
+        } else {
             kLast = uint256(reserve0) * uint256(reserve1);
         }
 

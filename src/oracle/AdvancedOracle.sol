@@ -2,6 +2,7 @@
 pragma solidity ^0.8.30;
 
 import "./UniswapV2Oracle.sol";
+import "../libraries/Math.sol";
 
 /**
  * @title 增强型价格预言机
@@ -56,27 +57,46 @@ contract AdvancedOracle is UniswapV2Oracle {
         if (pair == address(0)) revert ZeroAddress();
 
         Observation storage observation = windowObservations[pair][period];
-
-        uint32 blockTimestamp = uint32(block.timestamp % 2**32);
-        uint32 timeElapsed = blockTimestamp - observation.timestamp;
-
-        if (observation.timestamp != 0 && timeElapsed < period) revert InsufficientTimeElapsed();
+        UniswapV2Pair pairContract = UniswapV2Pair(pair);
 
         // 检查流动性
-        (uint112 reserve0, uint112 reserve1,) = UniswapV2Pair(pair).getReserves();
+        (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast) = pairContract.getReserves();
         uint256 liquidity = uint256(reserve0) * uint256(reserve1);
         if (liquidity < minimumLiquidity) revert InsufficientLiquidity();
 
-        // 获取当前累积价格
-        uint256 price0Cumulative = UniswapV2Pair(pair).price0CumulativeLast();
-        uint256 price1Cumulative = UniswapV2Pair(pair).price1CumulativeLast();
+        (
+            uint256 price0Cumulative,
+            uint256 price1Cumulative,
+            uint32 blockTimestamp
+        ) = _currentCumulativePrices(pairContract, reserve0, reserve1, blockTimestampLast);
 
-        // 更新观察数据
+        if (observation.timestamp == 0) {
+            observation.timestamp = blockTimestamp;
+            observation.lastElapsed = 0;
+            observation.price0CumulativeLast = price0Cumulative;
+            observation.price1CumulativeLast = price1Cumulative;
+            observation.price0Average = 0;
+            observation.price1Average = 0;
+            return;
+        }
+
+        uint32 timeElapsed = _timeElapsed(observation.timestamp, blockTimestamp);
+        if (timeElapsed < period) revert InsufficientTimeElapsed();
+
+        uint256 intervalPrice0 = _intervalAverage(price0Cumulative, observation.price0CumulativeLast, timeElapsed);
+        uint256 intervalPrice1 = _intervalAverage(price1Cumulative, observation.price1CumulativeLast, timeElapsed);
+
+        uint224 price0Average = _smoothAverage(uint256(observation.price0Average), intervalPrice0);
+        uint224 price1Average = _smoothAverage(uint256(observation.price1Average), intervalPrice1);
+
         observation.timestamp = blockTimestamp;
+        observation.lastElapsed = timeElapsed;
         observation.price0CumulativeLast = price0Cumulative;
         observation.price1CumulativeLast = price1Cumulative;
+        observation.price0Average = price0Average;
+        observation.price1Average = price1Average;
 
-        emit WindowUpdate(pair, period, price0Cumulative, price1Cumulative);
+        emit WindowUpdate(pair, period, price0Average, price1Average);
     }
 
     /**
@@ -96,16 +116,17 @@ contract AdvancedOracle is UniswapV2Oracle {
 
         Observation memory observation = windowObservations[pair][period];
 
-        uint32 blockTimestamp = uint32(block.timestamp % 2**32);
-        uint32 timeElapsed = blockTimestamp - observation.timestamp;
+        if (
+            observation.timestamp == 0 ||
+            observation.price0Average == 0 ||
+            observation.price1Average == 0 ||
+            observation.lastElapsed < period
+        ) {
+            revert InsufficientTimeElapsed();
+        }
 
-        if (observation.timestamp == 0 || timeElapsed < period) revert InsufficientTimeElapsed();
-
-        uint256 price0CumulativeCurrent = UniswapV2Pair(pair).price0CumulativeLast();
-        uint256 price1CumulativeCurrent = UniswapV2Pair(pair).price1CumulativeLast();
-
-        price0 = (price0CumulativeCurrent - observation.price0CumulativeLast) / timeElapsed;
-        price1 = (price1CumulativeCurrent - observation.price1CumulativeLast) / timeElapsed;
+        price0 = uint256(observation.price0Average);
+        price1 = uint256(observation.price1Average);
     }
 
     /**
@@ -170,7 +191,13 @@ contract AdvancedOracle is UniswapV2Oracle {
         prices1 = new uint256[](pairs.length);
 
         for (uint i = 0; i < pairs.length; i++) {
-            (prices0[i], prices1[i]) = this.consult(pairs[i]);
+            try this.consult(pairs[i]) returns (uint256 price0, uint256 price1) {
+                prices0[i] = price0;
+                prices1[i] = price1;
+            } catch {
+                prices0[i] = 0;
+                prices1[i] = 0;
+            }
         }
     }
 
@@ -191,22 +218,35 @@ contract AdvancedOracle is UniswapV2Oracle {
     {
         // 检查流动性
         (uint112 reserve0, uint112 reserve1,) = UniswapV2Pair(pair).getReserves();
-        uint256 liquidity = uint256(reserve0) * uint256(reserve1);
+        if (reserve0 == 0 || reserve1 == 0) {
+            return (0, 0, false);
+        }
+
+        uint256 liquidityProduct = uint256(reserve0) * uint256(reserve1);
+        uint256 liquidity = Math.sqrt(liquidityProduct);
 
         if (liquidity < minLiquidity) {
             return (0, 0, false);
         }
 
-        try this.consult(pair) returns (uint256 p0, uint256 p1) {
-            // 额外的价格合理性检查
-            if (p0 > 0 && p1 > 0 && p0 < type(uint256).max / 1e18 && p1 < type(uint256).max / 1e18) {
-                return (p0, p1, true);
-            }
-        } catch {
+        Observation memory observation = pairObservations[pair];
+        if (
+            observation.timestamp == 0 ||
+            observation.lastElapsed < PERIOD ||
+            observation.price0Average == 0 ||
+            observation.price1Average == 0
+        ) {
             return (0, 0, false);
         }
 
-        return (0, 0, false);
+        uint256 avgPrice0 = uint256(observation.price0Average);
+        uint256 avgPrice1 = uint256(observation.price1Average);
+
+        if (avgPrice0 == 0 || avgPrice1 == 0) {
+            return (0, 0, false);
+        }
+
+        return (avgPrice0, avgPrice1, true);
     }
 
     /**

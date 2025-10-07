@@ -159,9 +159,11 @@ contract UniswapV2Factory is IUniswapV2Factory {
      * @return pair 预计算的交易对地址
      */
     function computePairAddress(address tokenA, address tokenB) external view returns (address pair) {
-        (address token0, address token1) = UniswapV2Library.sortTokens(tokenA, tokenB);
+        if (tokenA == tokenB) revert UniswapV2Library.IdenticalAddresses();
+        if (tokenA == address(0) || tokenB == address(0)) revert UniswapV2Library.ZeroAddress();
+        if (tokenA > tokenB) revert("UniswapV2Factory: TOKENS_NOT_SORTED");
 
-        bytes32 salt = keccak256(abi.encodePacked(token0, token1));
+        bytes32 salt = keccak256(abi.encodePacked(tokenA, tokenB));
         bytes32 hash = keccak256(
             abi.encodePacked(
                 bytes1(0xff),
